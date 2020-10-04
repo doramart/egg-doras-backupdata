@@ -3,8 +3,6 @@ const isDev = process.env.NODE_ENV == 'development' ? true : false;
 const fs = require("fs");
 const _ = require('lodash');
 const child = require('child_process');
-const archiver = require('archiver')
-const muri = require('muri');
 let BackUpDataController = {
 
     async list(ctx, app) {
@@ -12,7 +10,11 @@ let BackUpDataController = {
         try {
 
             let payload = ctx.query;
-            let backUpDataList = await ctx.service.backUpData.find(payload);
+            let backUpDataList = await ctx.service.backUpData.find(payload, {
+                attributes: {
+                    exclude: ['path']
+                }
+            });
 
             ctx.helper.renderSuccess(ctx, {
                 data: backUpDataList
@@ -32,102 +34,47 @@ let BackUpDataController = {
 
         let ms = moment(new Date()).format('YYYYMMDDHHmmss').toString();
 
-        let databackforder = app.config.mongodb.backUpPath;
+        let databackforder = app.config.sqlPath.backup;
         let dataPath = databackforder + ms;
+        let sqlInfo = app.config.sequelize;
 
-        const parsedUri = muri(app.config.mongoose.client.url)
-        const parameters = []
-        if (parsedUri.auth) {
-            parameters.push(`-u "${parsedUri.auth.user}"`, `-p "${parsedUri.auth.pass}"`)
-        }
-        if (parsedUri.db) {
-            parameters.push(`-d "${parsedUri.db}"`)
-        }
-        let cmdstr = `${app.config.mongodb.binPath}mongodump ${parameters.join(' ')} -o "${dataPath}"`
+        if (!_.isEmpty(sqlInfo)) {
+            let {
+                username,
+                password,
+                database
+            } = sqlInfo;
 
-        if (!fs.existsSync(databackforder)) {
-            fs.mkdirSync(databackforder);
-        }
-        if (fs.existsSync(dataPath)) {
-            console.log('已经创建过备份了');
-        } else {
-            fs.mkdirSync(dataPath);
-
-            try {
-                child.execSync(cmdstr);
-                // 操作记录入库
-                let optParams = {
-                    logs: "Data backup",
-                    path: dataPath,
-                    fileName: ms
-                }
-                await ctx.service.backUpData.create(optParams);
-                ctx.helper.renderSuccess(ctx);
-            } catch (error) {
-                ctx.helper.renderFail(ctx, {
-                    message: err
-                });
+            let cmdstr = `${app.config.sqlPath.bin}mysqldump -u${username} -p${password} ${database} > ${dataPath}/${database}.sql`;
+            if (!fs.existsSync(databackforder)) {
+                fs.mkdirSync(databackforder);
             }
+            if (fs.existsSync(dataPath)) {
+                console.log('已经创建过备份了');
+            } else {
+                fs.mkdirSync(dataPath);
 
+                try {
+                    child.execSync(cmdstr);
+                    // 操作记录入库
+                    let optParams = {
+                        logs: "Data backup",
+                        path: dataPath,
+                        fileName: `${ms}/${database}.sql`
+                    }
+                    await ctx.service.backUpData.create(optParams);
+                    ctx.helper.renderSuccess(ctx);
+                } catch (error) {
+                    ctx.helper.renderFail(ctx, {
+                        message: error
+                    });
+                }
+
+            }
         }
+
 
     },
-
-    // 数据恢复
-    async restoreData(ctx, app) {
-
-        try {
-            let files = ctx.request.body || {};
-            if (!files.id) {
-                throw new Error(ctx.__('validate_error_params'));
-            }
-            let targetDataInfo = await ctx.service.backUpData.item({
-                query: {
-                    id: files.id
-                }
-            });
-            if (_.isEmpty(targetDataInfo)) {
-                throw new Error(ctx.__('validate_error_params'));
-            }
-            let localDataPath = targetDataInfo.path;
-
-            const parsedUri = muri(app.config.mongoose.client.url)
-            const parameters = []
-            if (parsedUri.auth) {
-                parameters.push(`-u "${parsedUri.auth.user}"`, `-p "${parsedUri.auth.pass}"`)
-            }
-            if (parsedUri.db) {
-                parameters.push(`-d "${parsedUri.db}"`)
-            }
-
-            if (!fs.existsSync(`${localDataPath}/${parsedUri.db}`)) {
-                throw new Error(ctx.__('validate_error_params'));
-            }
-
-            let cmdstr = `${app.config.mongodb.binPath}mongorestore ${parameters.join(' ')} --drop ${localDataPath}/${parsedUri.db}`
-
-            child.execSync(cmdstr);
-
-            // 操作记录入库
-            let optParams = {
-                logs: "Data restore",
-                path: `${localDataPath}/${parsedUri.db}`
-            }
-
-            await ctx.service.backUpData.create(optParams);
-
-            ctx.helper.renderSuccess(ctx);
-
-        } catch (err) {
-            ctx.helper.renderFail(ctx, {
-                message: err
-            });
-        }
-
-    },
-
-
-
 
     async removes(ctx, app) {
 
