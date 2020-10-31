@@ -5,7 +5,6 @@ module.exports = app => {
     const {
         DATE,
         STRING,
-        UUID,
         INTEGER,
         VIRTUAL
     } = app.Sequelize;
